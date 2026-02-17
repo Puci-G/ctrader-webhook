@@ -4,8 +4,13 @@ export async function handler(event) {
       return { statusCode: 405, body: JSON.stringify({ ok: false, error: "method_not_allowed" }) };
     }
 
+    // Default Telegram (Zone bot)
     const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+    // Secondary Telegram (Threshold/Cross bot)
+    const TELEGRAM_BOT_TOKEN1 = process.env.TELEGRAM_BOT_TOKEN1;
+    const TELEGRAM_CHAT_ID1 = process.env.TELEGRAM_CHAT_ID1;
 
     // Support one or multiple secrets:
     // - WEBHOOK_SECRET=abc
@@ -13,7 +18,7 @@ export async function handler(event) {
     const singleSecret = process.env.WEBHOOK_SECRET;
     const multiSecrets = process.env.WEBHOOK_SECRETS; // comma-separated
     const allowedSecrets = (multiSecrets ? multiSecrets.split(",") : [])
-      .map(s => s.trim())
+      .map((s) => s.trim())
       .filter(Boolean);
 
     if (singleSecret && !allowedSecrets.includes(singleSecret)) {
@@ -30,10 +35,6 @@ export async function handler(event) {
       return { statusCode: 401, body: JSON.stringify({ ok: false, error: "unauthorized" }) };
     }
 
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "missing_env_vars" }) };
-    }
-
     let payload = {};
     try {
       payload = event.body ? JSON.parse(event.body) : {};
@@ -44,18 +45,31 @@ export async function handler(event) {
     const symbol = payload.symbol ?? "UNKNOWN";
 
     // ---- Detect which bot/schema this payload is ----
-    // Bot A (your existing zone/breakout bot):
-    //  - eventType: zoneReady/breakout/entered/closeInside/test
-    //  - rangeHigh/rangeLow/mid/session/reason/extra
-    //
-    // Bot B (Slow MA crosses bot):
-    //  - eventType: CROSS_UP / CROSS_DOWN
-    //  - line, value, threshold, timeframe, price, serverTimeUtc
     const isCrossBot =
       payload?.eventType === "CROSS_UP" ||
       payload?.eventType === "CROSS_DOWN" ||
       (typeof payload?.threshold !== "undefined" && typeof payload?.value !== "undefined") ||
       payload?.line === "slow_ma_of_rsi";
+
+    // Pick Telegram target based on payload type
+    const tgToken = isCrossBot ? TELEGRAM_BOT_TOKEN1 : TELEGRAM_BOT_TOKEN;
+    const tgChatId = isCrossBot ? TELEGRAM_CHAT_ID1 : TELEGRAM_CHAT_ID;
+
+    // Validate env vars for the selected target
+    const missing = [];
+    if (!tgToken) missing.push(isCrossBot ? "TELEGRAM_BOT_TOKEN1" : "TELEGRAM_BOT_TOKEN");
+    if (!tgChatId) missing.push(isCrossBot ? "TELEGRAM_CHAT_ID1" : "TELEGRAM_CHAT_ID");
+    if (missing.length) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          ok: false,
+          error: "missing_env_vars",
+          missing,
+          target: isCrossBot ? "threshold_bot" : "zone_bot",
+        }),
+      };
+    }
 
     // ---- Time fields (keep your legacy UTC + NY logic) ----
     const utcDate = payload.utcDate ?? "";
@@ -96,7 +110,6 @@ Line: ${line}
 Value: ${safeVal}
 Threshold: ${safeThr}${price !== "" ? `\nPrice: ${price}` : ""}`;
     } else {
-      // existing bot format (your current logic)
       const eventType = payload.eventType ?? "signal";
       const rangeHigh = payload.rangeHigh ?? "";
       const rangeLow = payload.rangeLow ?? "";
@@ -135,11 +148,11 @@ ${zoneBlock ? zoneBlock + "\n\n" : ""}Reason: ${reason}${extra ? `\nExtra: ${ext
       text = text.slice(0, 3900) + "\n…(truncated)";
     }
 
-    const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
     const tgResp = await fetch(tgUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text })
+      body: JSON.stringify({ chat_id: tgChatId, text }),
     });
 
     if (!tgResp.ok) {
@@ -147,7 +160,14 @@ ${zoneBlock ? zoneBlock + "\n\n" : ""}Reason: ${reason}${extra ? `\nExtra: ${ext
       return { statusCode: 500, body: JSON.stringify({ ok: false, error: "telegram_failed", details: errText }) };
     }
 
-    return { statusCode: 200, body: JSON.stringify({ ok: true, type: isCrossBot ? "cross_bot" : "zone_bot" }) };
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        type: isCrossBot ? "cross_bot" : "zone_bot",
+        telegram_target: isCrossBot ? "bot1" : "bot0",
+      }),
+    };
   } catch (e) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "server_error", details: String(e) }) };
   }
