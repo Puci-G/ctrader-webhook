@@ -1,6 +1,9 @@
 export async function handler(event) {
   try {
+    console.log("Received event:", event); // Log the received event
+
     if (event.httpMethod !== "POST") {
+      console.log("Invalid HTTP method. Expected POST.");
       return { statusCode: 405, body: JSON.stringify({ ok: false, error: "method_not_allowed" }) };
     }
 
@@ -32,15 +35,19 @@ export async function handler(event) {
       event.headers?.["x-webhook-secret".toLowerCase()];
 
     if (!allowedSecrets.length || !secret || !allowedSecrets.includes(secret)) {
+      console.log("Unauthorized request, invalid or missing secret.");
       return { statusCode: 401, body: JSON.stringify({ ok: false, error: "unauthorized" }) };
     }
 
     let payload = {};
     try {
       payload = event.body ? JSON.parse(event.body) : {};
-    } catch {
+    } catch (error) {
+      console.log("Error parsing JSON payload:", error);
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "invalid_json" }) };
     }
+
+    console.log("Parsed payload:", payload); // Log the parsed payload
 
     const symbol = payload.symbol ?? "UNKNOWN";
 
@@ -60,6 +67,7 @@ export async function handler(event) {
     if (!tgToken) missing.push(isCrossBot ? "TELEGRAM_BOT_TOKEN1" : "TELEGRAM_BOT_TOKEN");
     if (!tgChatId) missing.push(isCrossBot ? "TELEGRAM_CHAT_ID1" : "TELEGRAM_CHAT_ID");
     if (missing.length) {
+      console.log("Missing environment variables:", missing);
       return {
         statusCode: 500,
         body: JSON.stringify({
@@ -143,6 +151,8 @@ ${timeBlock}
 ${zoneBlock ? zoneBlock + "\n\n" : ""}Reason: ${reason}${extra ? `\nExtra: ${extra}` : ""}`;
     }
 
+    console.log("Prepared Telegram message:", text); // Log prepared message text
+
     // Telegram max message length is 4096, keep it safe
     if (text.length > 3900) {
       text = text.slice(0, 3900) + "\n…(truncated)";
@@ -157,6 +167,7 @@ ${zoneBlock ? zoneBlock + "\n\n" : ""}Reason: ${reason}${extra ? `\nExtra: ${ext
 
     if (!tgResp.ok) {
       const errText = await tgResp.text();
+      console.log("Telegram request failed:", errText); // Log failed request details
       return { statusCode: 500, body: JSON.stringify({ ok: false, error: "telegram_failed", details: errText }) };
     }
 
@@ -169,6 +180,7 @@ ${zoneBlock ? zoneBlock + "\n\n" : ""}Reason: ${reason}${extra ? `\nExtra: ${ext
       }),
     };
   } catch (e) {
+    console.log("Server error:", e); // Log server error
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "server_error", details: String(e) }) };
   }
 }
